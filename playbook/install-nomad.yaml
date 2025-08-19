@@ -1,0 +1,161 @@
+---
+- name: Install and Configure Nomad prerequisites on ARM64 Ubuntu
+  hosts: nomad_cluster
+  become: yes
+  become_method: sudo
+  become_user: root
+  gather_facts: yes
+  connection: ssh
+
+  tasks:
+    - name: Include variables
+      ansible.builtin.include_vars:
+        vars.yaml
+
+    - name: Disable and turn off swap
+      block:
+        - name: Remove swap from fstab
+          ansible.builtin.replace:
+            path: /etc/fstab
+            regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+            replace: '# \1'
+        - name: Disable swap
+          ansible.builtin.command: swapoff -a
+          ignore_errors: yes
+
+    - name: Stop and disable firewall (ufw)
+      ansible.builtin.systemd:
+        name: ufw
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - unzip
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor > /tmp/docker.gpg && sudo mv /tmp/docker.gpg /etc/apt/keyrings/docker.gpg
+      register: docker_gpg_result
+      changed_when: docker_gpg_result.rc == 0
+      failed_when: docker_gpg_result.rc != 0
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Update apt cache for Docker repository
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - docker-compose-plugin
+        state: present
+
+    - name: Start and enable Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Create docker group
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Add vagrant user to docker group
+      ansible.builtin.user:
+        name: vagrant
+        groups: docker
+        append: yes
+
+    - name: Ensure Nomad directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/nomad.d
+        - "{{ nomad_data_dir }}"
+
+    - name: Download Nomad
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/nomad/{{ nomad_version }}/nomad_{{ nomad_version }}_linux_arm64.zip"
+        dest: /tmp/nomad.zip
+        mode: '0644'
+
+    - name: Unarchive Nomad binary
+      ansible.builtin.unarchive:
+        src: /tmp/nomad.zip
+        dest: /usr/local/bin/
+        remote_src: yes
+        mode: '0755'
+
+    - name: Create Nomad systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/nomad.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=HashiCorp Nomad - A cluster scheduler
+          Documentation=https://www.nomadproject.io/docs/
+          Requires=network-online.target
+          After=network-online.target
+          ConditionDirectoryNotEmpty=/etc/nomad.d
+
+          [Service]
+          Type=notify
+          User=root
+          Group=root
+          ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillMode=process
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+          LimitNPROC=infinity
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    - name: Set permissions on /etc/nomad.d
+      ansible.builtin.file:
+        path: /etc/nomad.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Ensure Nomad service is disabled for now
+      ansible.builtin.systemd:
+        name: nomad
+        enabled: no
+        state: stopped
+      ignore_errors: yes
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.command: systemctl daemon-reload 

@@ -1,0 +1,287 @@
+---
+- name: Install PostgreSQL and Vault on infra node
+  hosts: infra
+  become: yes
+  gather_facts: yes
+
+  vars:
+    postgres_version: "14"
+    postgres_listen_addr: "0.0.0.0"
+    postgres_db: "vault"
+    postgres_user: "vaultuser"
+    postgres_password: "vaultpass"
+
+  tasks:
+    - name: Include variables
+      ansible.builtin.include_vars:
+        vars.yaml
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install PostgreSQL
+      ansible.builtin.apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+        state: present
+
+    # Install psycopg2 and acl for DB tasks
+    - name: Install dependencies for PostgreSQL modules
+      ansible.builtin.apt:
+        name:
+          - python3-psycopg2
+          - acl
+        state: present
+
+    - name: Ensure PostgreSQL is started and enabled
+      ansible.builtin.systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+
+    - name: Configure PostgreSQL to listen on all addresses
+      ansible.builtin.lineinfile:
+        path: /etc/postgresql/16/main/postgresql.conf
+        regexp: '^#?listen_addresses'
+        line: "listen_addresses = '{{ postgres_listen_addr }}'"
+      notify: Restart PostgreSQL
+
+    - name: Allow all hosts to connect with md5
+      ansible.builtin.blockinfile:
+        path: /etc/postgresql/16/main/pg_hba.conf
+        block: |
+          host    all             all             0.0.0.0/0               md5
+      notify: Restart PostgreSQL
+
+    - name: Create database for Vault
+      become_user: postgres
+      ansible.builtin.postgresql_db:
+        name: "{{ postgres_db }}"
+        state: present
+        login_unix_socket: /var/run/postgresql
+
+    - name: Create user for Vault
+      become_user: postgres
+      ansible.builtin.postgresql_user:
+        name: "{{ postgres_user }}"
+        password: "{{ postgres_password }}"
+        role_attr_flags: "LOGIN"
+        state: present
+        login_unix_socket: /var/run/postgresql
+
+    - name: Grant privileges to Vault user on Vault database
+      become_user: postgres
+      community.postgresql.postgresql_privs:
+        type: database
+        database: "{{ postgres_db }}"
+        objs: "{{ postgres_db }}"
+        roles: "{{ postgres_user }}"
+        privs: "ALL"
+        state: present
+        login_unix_socket: /var/run/postgresql
+
+    - name: Grant USAGE and CREATE on public schema to Vault user
+      become_user: postgres
+      community.postgresql.postgresql_privs:
+        type: schema
+        database: "{{ postgres_db }}"
+        objs: public
+        roles: "{{ postgres_user }}"
+        privs: "USAGE,CREATE"
+        state: present
+        login_unix_socket: /var/run/postgresql
+
+    - name: Ensure vault_kv_store table exists
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        login_unix_socket: /var/run/postgresql
+        query: |
+          CREATE TABLE IF NOT EXISTS vault_kv_store (
+            parent_path TEXT COLLATE "C" NOT NULL,
+            path        TEXT COLLATE "C",
+            key         TEXT COLLATE "C",
+            value       BYTEA,
+            CONSTRAINT pkey PRIMARY KEY (path, key)
+          );
+
+    - name: Ensure parent_path_idx index exists
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        login_unix_socket: /var/run/postgresql
+        query: |
+          CREATE INDEX IF NOT EXISTS parent_path_idx
+          ON vault_kv_store (parent_path);
+
+    - name: Ensure vault_kv_store owner is vault user
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        login_unix_socket: /var/run/postgresql
+        query: |
+          ALTER TABLE IF EXISTS vault_kv_store
+          OWNER TO {{ postgres_user }};
+
+    - name: Grant table privileges on vault_kv_store to vault user
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        login_unix_socket: /var/run/postgresql
+        query: |
+          GRANT SELECT, INSERT, UPDATE, DELETE
+          ON TABLE vault_kv_store
+          TO {{ postgres_user }};
+
+    - name: Set default table privileges in public schema for vault user
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        login_unix_socket: /var/run/postgresql
+        query: |
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+          GRANT SELECT, INSERT, UPDATE, DELETE
+          ON TABLES TO {{ postgres_user }};
+
+    - name: Ensure directories for Vault exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/vault.d
+        - "{{ vault_data_dir }}"
+        - "{{ vault_cert_dir }}"
+
+    - name: Download Vault binary
+      # yamllint disable rule:line-length
+      ansible.builtin.get_url:
+        url: >-
+          https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_arm64.zip
+        dest: /tmp/vault.zip
+        mode: '0644'
+      # yamllint enable rule:line-length
+
+    - name: Unarchive Vault binary
+      ansible.builtin.unarchive:
+        src: /tmp/vault.zip
+        dest: /usr/local/bin/
+        remote_src: yes
+        mode: '0755'
+
+    - name: Install certificate placeholders (self-signed)
+      ansible.builtin.copy:
+        dest: "{{ vault_cert_dir }}/README.txt"
+        content: |
+          Place your TLS cert and key here:
+          - {{ vault_cert_dir }}/server.pem
+          - {{ vault_cert_dir }}/server.key
+        mode: '0644'
+
+    - name: Write Vault configuration (single-node, PostgreSQL storage)
+      ansible.builtin.copy:
+        dest: "{{ vault_config_path }}"
+        mode: '0640'
+        # yamllint disable rule:line-length
+        content: |
+          storage "postgresql" {
+            connection_url = "postgresql://{{ postgres_user }}:{{ postgres_password }}@localhost:5432/{{ postgres_db }}?sslmode=disable"
+            max_parallel = 10
+          }
+
+          listener "tcp" {
+            address = "0.0.0.0:8200"
+            tls_disable = true
+            tls_require_and_verify_client_cert = true
+            # tls_cert_file = "/home/vagrant/jwt_public.crt"
+            # tls_key_file = "/home/vagrant/jwt_private.pem"
+          }
+
+          disable_mlock = true
+          disable_cache = true
+          log_level = "info"
+          api_addr = "http://localhost:8200"
+          ui = true
+          disable_clustering = true
+        # yamllint enable rule:line-length
+
+    - name: Create systemd unit for Vault
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vault.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=HashiCorp Vault - A tool for managing secrets
+          Documentation=https://www.vaultproject.io/docs/
+          Requires=network-online.target
+          After=network-online.target postgresql.service
+          ConditionFileNotEmpty={{ vault_config_path }}
+
+          [Service]
+          Type=notify
+          User=root
+          Group=root
+          ExecStart=/usr/local/bin/vault server -config={{ vault_config_path }}
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillMode=process
+          Restart=on-failure
+          RestartSec=5
+          TimeoutStopSec=30
+          StartLimitInterval=60
+          StartLimitBurst=3
+          LimitNOFILE=65536
+          LimitNPROC=infinity
+          Environment=VAULT_ADDR={{ vault_api_addr }}
+          Environment=VAULT_LOG_LEVEL=debug
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+        - Restart Vault
+
+    - name: Restart Vault service
+      ansible.builtin.systemd:
+        name: vault
+        state: restarted
+        enabled: yes
+
+    - name: Apply handlers to ensure Vault is running
+      ansible.builtin.meta: flush_handlers
+
+    - name: Check if Vault migration already ran
+      ansible.builtin.stat:
+        path: "{{ vault_data_dir }}/.migrated"
+      register: vault_migration_marker
+
+    - name: Run Vault storage migration
+      ansible.builtin.command: /usr/local/bin/vault operator migrate
+      environment:
+        VAULT_ADDR: "{{ vault_api_addr }}"
+      when: not vault_migration_marker.stat.exists
+
+    - name: Create migration marker file
+      ansible.builtin.file:
+        path: "{{ vault_data_dir }}/.migrated"
+        state: touch
+      when: not vault_migration_marker.stat.exists
+
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted
+
+    - name: Reload systemd
+      ansible.builtin.command: systemctl daemon-reload
+
+    - name: Restart Vault
+      ansible.builtin.systemd:
+        name: vault
+        enabled: yes
+        state: restarted

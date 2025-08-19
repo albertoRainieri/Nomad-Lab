@@ -1,0 +1,66 @@
+---
+- name: Initialize Nomad Server
+  hosts: nomad_servers
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Include variables
+      ansible.builtin.include_vars:
+        vars.yaml
+
+    - name: Write Nomad server configuration
+      ansible.builtin.copy:
+        dest: /etc/nomad.d/server.hcl
+        mode: '0640'
+        content: |
+          data_dir  = "{{ nomad_data_dir }}"
+          bind_addr = "{{ nomad_bind_addr }}"
+
+          region    = "{{ nomad_region }}"
+          datacenter = "{{ nomad_datacenter }}"
+
+          server {
+            enabled = true
+            bootstrap_expect = 1
+          }
+
+          advertise {
+            http = "{{ ansible_host }}:4646"
+            rpc  = "{{ ansible_host }}:4647"
+            serf = "{{ ansible_host }}:4648"
+          }
+
+          client {
+            enabled = false
+          }
+
+          acl {
+            enabled = true
+          }
+
+          vault {
+            enabled = true
+            address = "{{ vault_api_addr }}"
+            # tls_skip_verify = {{ vault_tls_skip_verify | lower }}
+            # jwt_auth_backend_path = "{{ vault_jwt_mount_path }}"
+
+            # # JWT signing configuration
+            # jwt_private_key_file = "/home/vagrant/jwt_private.pem"
+            default_identity {
+              aud = {{ vault_jwt_audience | to_json }}
+              ttl = "1h"
+            }
+          }
+
+          telemetry {
+            publish_allocation_metrics = true
+            publish_node_metrics = true
+          }
+
+    - name: Start and enable Nomad server
+      ansible.builtin.systemd:
+        name: nomad
+        enabled: yes
+        state: started
+        daemon_reload: yes

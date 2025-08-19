@@ -1,5 +1,0 @@
----
-# vars file for jenkins
-nomad_job_name: 'jenkins-master'
-username: Alberto
-password: Password

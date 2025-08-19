@@ -1,7 +1,0 @@
----
-# vars file for gitlab
-nomad_job_name: 'gitea'
-docker_image_gitea: 'gitea/gitea:1.22.0-rootless'
-docker_image_mysql: 'mysql:8'
-docker_volume_gitea: 'gitea_home'
-docker_volume_mysql: 'mysql_home'

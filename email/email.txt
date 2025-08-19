@@ -1,0 +1,31 @@
+Hi Ryan,
+Over the past few days, I successfully recreated locally the environment with a Nomad cluster and Vault instance, and I was able to reproduce the authentication error you were experiencing.
+
+ The authentication failure occurred due to an incorrect Vault auth method configuration path. The error indicated that Nomad was attempting to authenticate via `/auth/jwt-nomad/login`, but your Vault configuration was set up under the default `/auth/jwt/` path: Here is your vault command indeed:
+
+vault write auth/jwt/config   jwt_validation_pubkeys=@jwt_public.pem default_role=nomad-cluster(i.e. you need to mention /auth/jwt-nomad/config not auth/jwt/config)
+This path mismatch prevented successful authentication between Nomad and Vault.After resolving the path issue, I encountered additional token signature validation errors:
+Vault: failed to derive vault token: failed to derive Vault token for identity vault_default:  
+failed to login with JWT: Error making API request. 
+URL: PUT http://192.168.59.120:8200/v1/auth/jwt-nomad/login Code: 400. 
+Errors: * error validating token: error verifying token signature: 
+no known key successfully validated the token signature
+This time, The solution involved implementing **JWKS (JSON Web Key Set) based authentication** instead of manual key management (i.e. you don't need to use your own private/public keys). Here's how this modern approach works:
+JWKS Authentication Flow
+
+1. Automatic Key Generation: Nomad automatically generates and manages its own JWT signing keys internally
+2. Public Key Exposure: Nomad exposes its current public keys via the standardized JWKS endpoint: `http://<nomad-server>:4646/.well-known/jwks.json`
+3. Dynamic Key Discovery: Vault fetches the public keys directly from this endpoint to verify JWT tokens
+4. Automatic Key Rotation: When Nomad rotates its signing keys, Vault automatically discovers the new keys from the JWKS endpointFinally 
+You can follow all the steps with this guide: https://www.hashicorp.com/en/blog/automating-workload-identity-for-vault-and-nomad-with-terraform?ref=dailydev. In this article, focus only on vault commands and nomad server/client configurations (Section "The Vault + Nomad workload identity integration").
+Let me know if that resolve your issues.
+Best regards,Alberto
+Il giorno lun 11 ago 2025 alle ore 12:27 Ryan Cortis <Ryan.Cortis@go.com.mt> ha scritto:
+Hi All,
+Please find attached our Hashicorp setup files and configurations used in our attempt to set up nomad workload identity integration with consul and vault.Let me know if you need further information or clarification.
+Thanks & regards,Ryan
+ Ryan CortisAppOps SpecialistIT OperationsGO p.l.c., GO, Tarxien Road, Zejtun, ZTN 3000, Malta. www.go.com.mt
+
+This email and any files or content transmitted with it are confidential and intended solely for the use of the individual or entity to whom they are addressed. This message contains confidential information and is intended only for the individual named. If you are not the named addressee you should not disseminate, distribute or copy this e-mail. Please notify the sender immediately by e-mail if you have received this e-mail by mistake and delete this e-mail from your system. If you are not the intended recipient you are notified that disclosing, copying, distributing or taking any action in reliance on the contents of this information is strictly prohibited. The Company and the originator of this email accept no liability for the content of this email, or for the consequences of any actions taken on the basis of the information provided, unless that information is subsequently confirmed in writing.
+
+Warning: Although the Company and the originator  have taken reasonable precautions to ensure no viruses are present in this email, the company cannot accept responsibility for any loss or damage arising from the use of this email or attachments.

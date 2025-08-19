@@ -1,0 +1,50 @@
+---
+- name: Join Nomad Client(s)
+  hosts: nomad_clients
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Include variables
+      ansible.builtin.include_vars:
+        vars.yaml
+
+    - name: Write Nomad client configuration
+      ansible.builtin.copy:
+        dest: /etc/nomad.d/client.hcl
+        mode: '0640'
+        content: |
+          data_dir  = "{{ nomad_data_dir }}"
+          bind_addr = "{{ nomad_bind_addr }}"
+
+          region    = "{{ nomad_region }}"
+          datacenter = "{{ nomad_datacenter }}"
+
+          server {
+            enabled = false
+          }
+
+          client {
+            enabled = true
+            servers = ["{{ hostvars[groups['nomad_servers'][0]].ansible_host }}:4647"]
+            cpu_total_compute = 2000 
+          }
+
+          advertise {
+            http = "{{ ansible_host }}:4646"
+            rpc  = "{{ ansible_host }}:4647"
+            serf = "{{ ansible_host }}:4648"
+          }
+
+          vault {
+            enabled = true
+            address = "{{ vault_api_addr }}"
+            jwt_auth_backend_path = "{{ vault_jwt_mount_path }}"
+          }
+
+    - name: Enable and start Nomad client
+      ansible.builtin.systemd:
+        name: nomad
+        enabled: yes
+        state: started
+        daemon_reload: yes 

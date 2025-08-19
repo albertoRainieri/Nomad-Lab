@@ -1,0 +1,27 @@
+all:
+  children:
+    nomad_servers:
+      hosts:
+        nserver:
+          ansible_host: 192.168.59.110
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+    nomad_clients:
+      hosts:
+        nclient1:
+          ansible_host: 192.168.59.111
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+    infra:
+      hosts:
+        ninfra:
+          ansible_host: 192.168.59.120
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+    nomad_cluster:
+      children:
+        nomad_servers:
+        nomad_clients:

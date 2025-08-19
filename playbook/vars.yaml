@@ -1,0 +1,33 @@
+# Ansible variables for Nomad ARM64 cluster (Ubuntu)
+ansible_user: vagrant
+ansible_node_path: /home/vagrant
+
+# Network configuration
+ip_server: 192.168.59.110
+ip_client1: 192.168.59.111
+ip_infra: 192.168.59.120
+
+# Nomad configuration
+nomad_version: "1.10.3"
+nomad_data_dir: "/opt/nomad"
+nomad_bind_addr: "0.0.0.0"
+nomad_advertise_addr: "{{ ansible_host }}"
+nomad_region: "global"
+nomad_datacenter: "dc1"
+
+# Vault configuration
+vault_version: "1.19.5"
+vault_config_path: "/etc/vault.d/vault.hcl"
+vault_data_dir: "/opt/vault"
+vault_cert_dir: "/certificates"
+vault_api_addr: "http://192.168.59.120:8200"
+
+# Vault <-> Nomad integration (JWT)
+vault_jwt_mount_path: "jwt-nomad"
+vault_jwt_audience: ["vault"]
+vault_jwt_role: "nomad-cluster"
+vault_tls_skip_verify: true
+
+# System configuration
+disable_swap: true
+disable_firewall: true

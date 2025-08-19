@@ -1,0 +1,44 @@
+---
+- name: Verify Nomad Cluster Status
+  hosts: nomad_servers
+  become: yes
+  gather_facts: no
+
+  tasks:
+    - name: Include variables
+      ansible.builtin.include_vars:
+        vars.yaml
+
+    - name: Check Nomad service status
+      ansible.builtin.systemd:
+        name: nomad
+      register: nomad_status
+
+    - name: Display Nomad service active state
+      ansible.builtin.debug:
+        msg: "Nomad service: {{ nomad_status.status.ActiveState }}"
+
+    - name: Wait for Nomad HTTP API
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:4646/v1/status/leader"
+        method: GET
+        status_code: 200
+      register: api_check
+      retries: 20
+      delay: 3
+      until: api_check.status == 200
+
+    - name: Show Nomad leader
+      ansible.builtin.debug:
+        var: api_check.json
+
+    - name: List Nomad nodes
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:4646/v1/nodes"
+        method: GET
+        status_code: 200
+      register: nodes
+
+    - name: Display nodes count
+      ansible.builtin.debug:
+        msg: "Nodes discovered: {{ nodes.json | length }}" 

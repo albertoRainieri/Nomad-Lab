@@ -1,0 +1,31 @@
+---
+- name: Create Nomad Cluster on ARM64
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: Display cluster creation start
+      ansible.builtin.debug:
+        msg: "Starting Nomad ARM64 cluster creation..."
+
+    - name: Install infrastructure (PostgreSQL, Vault)
+      ansible.builtin.include_tasks: playbook/install-infra.yaml
+
+    - name: Install and configure Nomad on all nodes
+      ansible.builtin.include_tasks: playbook/install-nomad.yaml
+
+    - name: Initialize Nomad server
+      ansible.builtin.include_tasks: playbook/init-server.yaml
+
+    - name: Join Nomad client(s)
+      ansible.builtin.include_tasks: playbook/join-client.yaml
+
+    - name: Verify Nomad cluster
+      ansible.builtin.include_tasks: playbook/verify-nomad.yaml
+
+    - name: Display cluster creation completion
+      ansible.builtin.debug:
+        msg: "Nomad ARM64 cluster creation completed!"
+
+ 

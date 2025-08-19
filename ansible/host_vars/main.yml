@@ -1,3 +1,0 @@
-consul_bind_address: '192.168.217.103'
-nmaster_ip_address: '192.168.217.100'
-ansible_dir: '/Users/albertorainieri/Learning/Nomad/ansible/roles'
